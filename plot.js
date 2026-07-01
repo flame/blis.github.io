@@ -1,6 +1,11 @@
 let db = null;
 let chartInstance = null;
 let SQL = null;
+let currentView = 'overview'; // 'overview' or 'detail'
+let currentMachine = null;
+
+// Progress tracking
+let progressInterval = null;
 
 // Database Initialization
 async function initializeDatabase() {
@@ -10,6 +15,85 @@ async function initializeDatabase() {
     SQL = await window.initSqlJs({
         locateFile: file => `https://sql.js.org/dist/${file}`
     });
+}
+
+// Auto-load database with progress tracking
+async function autoLoadDatabase() {
+    showLoading();
+    updateProgress(10);
+
+    try {
+        // Initialize SQL.js if needed
+        await initializeDatabase();
+        updateProgress(30);
+
+        // Fetch perf.sqlite from the server
+        const response = await fetch('perf.sqlite');
+
+        if (!response.ok) {
+            throw new Error(`Failed to fetch database: ${response.statusText}`);
+        }
+
+        // Track download progress
+        const contentLength = response.headers.get('content-length');
+        let loadedLength = 0;
+
+        const reader = response.body.getReader();
+        const chunks = [];
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            chunks.push(value);
+            loadedLength += value.length;
+
+            if (contentLength) {
+                const percentComplete = Math.round((loadedLength / contentLength) * 100);
+                updateProgress(30 + (percentComplete * 0.6) / 100); // 30-60% for download
+            }
+        }
+
+        const arrayBuffer = new Uint8Array(loadedLength);
+        let position = 0;
+        for (const chunk of chunks) {
+            arrayBuffer.set(chunk, position);
+            position += chunk.length;
+        }
+
+        updateProgress(70);
+
+        // Load database
+        db = new SQL.Database(arrayBuffer);
+        updateProgress(90);
+
+        const dbStatus = document.getElementById('db-status');
+        dbStatus.textContent = '✓ Database loaded: perf.sqlite';
+        dbStatus.classList.add('loaded');
+
+        updateProgress(100);
+
+        // Slight delay for visual feedback
+        setTimeout(() => {
+            clearLoading();
+            document.getElementById('db-loader').style.display = 'none';
+            loadMachineOverview();
+        }, 300);
+    } catch (error) {
+        showError(`Failed to load database: ${error.message}`);
+        clearLoading();
+    }
+}
+
+// Progress update function
+function updateProgress(percentage) {
+    const progressFill = document.getElementById('progress-fill');
+    const progressText = document.getElementById('progress-text');
+
+    if (progressFill && progressText) {
+        progressFill.style.width = percentage + '%';
+        progressText.textContent = Math.round(percentage) + '%';
+    }
 }
 
 async function loadDatabase(event) {
@@ -29,10 +113,12 @@ async function loadDatabase(event) {
 
         document.getElementById('db-status').textContent = `✓ Database loaded: ${file.name}`;
         document.getElementById('db-status').classList.add('loaded');
-        document.getElementById('control-panel').classList.add('active');
 
         showSuccess(`Database loaded successfully: ${file.name}`);
         clearLoading();
+
+        // Load machine overview
+        loadMachineOverview();
     } catch (error) {
         showError(`Failed to load database: ${error.message}`);
         clearLoading();
@@ -40,24 +126,35 @@ async function loadDatabase(event) {
 }
 
 // UI Control Functions
-function updateConditionalGroups() {
-    const plotType = document.getElementById('plot-type').value;
-    document.getElementById('historical-params').classList.remove('visible');
-    document.getElementById('scaling-params').classList.remove('visible');
-    document.getElementById('overview-params').classList.remove('visible');
-
-    if (plotType === 'historical') {
-        document.getElementById('historical-params').classList.add('visible');
-    } else if (plotType === 'scaling') {
-        document.getElementById('scaling-params').classList.add('visible');
-    } else if (plotType === 'overview') {
-        document.getElementById('overview-params').classList.add('visible');
-    }
-}
 
 function clearMessages() {
     document.getElementById('error-message').classList.remove('active');
     document.getElementById('success-message').classList.remove('active');
+}
+
+// View Management Functions
+function switchView(toView) {
+    const fromView = currentView === 'overview' ? 'overview-view' : 'detail-view';
+    const toViewElement = toView === 'overview' ? 'overview-view' : 'detail-view';
+
+    const fromElement = document.getElementById(fromView);
+    const toElement = document.getElementById(toViewElement);
+
+    if (currentView === toView) return;
+
+    // Animate out current view
+    fromElement.classList.add('exiting');
+
+    // After animation, switch views
+    setTimeout(() => {
+        fromElement.classList.remove('active', 'exiting');
+        toElement.classList.add('active');
+        currentView = toView;
+    }, 500);
+}
+
+function backToOverview() {
+    switchView('overview');
 }
 
 function showError(message) {
@@ -75,21 +172,15 @@ function showSuccess(message) {
 }
 
 function showLoading() {
-    document.getElementById('loading').classList.add('active');
+    // Loading indicator no longer needed
 }
 
 function clearLoading() {
-    document.getElementById('loading').classList.remove('active');
+    // Loading indicator no longer needed
 }
 
 function showParams(params, plotType) {
-    const paramsDisplay = document.getElementById('params-display');
-    const paramsHtml = Object.entries(params)
-        .map(([key, value]) => `<strong>${key}:</strong> ${value === -1 ? '(any)' : value}`)
-        .join('<br>');
-
-    paramsDisplay.innerHTML = `<h3>Active Parameters (${plotType})</h3><p>${paramsHtml}</p>`;
-    paramsDisplay.classList.add('active');
+    // Parameters display no longer needed
 }
 
 // Database Query Functions
@@ -239,6 +330,264 @@ function queryOverviewPlot(git, machine, threads, dt, m, n, k) {
     return queryDatabase(query, params);
 }
 
+// Machine Overview Query Functions
+function getLatestGitCommit() {
+    const query = 'SELECT DISTINCT git FROM run ORDER BY timestamp DESC LIMIT 1';
+    const result = queryDatabase(query);
+    return result.length > 0 ? result[0].git : null;
+}
+
+function getMaxThreads() {
+    const query = 'SELECT MAX(threads) as max_threads FROM run';
+    const result = queryDatabase(query);
+    return result.length > 0 ? result[0].max_threads : -1;
+}
+
+function getAllMachines() {
+    const query = 'SELECT DISTINCT machine FROM run ORDER BY machine ASC';
+    return queryDatabase(query);
+}
+
+function getMachineOverviewData(git, maxThreads, machine) {
+    let query = `
+        SELECT op, MAX(gflops) as gflops
+        FROM run
+        WHERE git = ? AND threads = ? AND machine = ?
+        GROUP BY op
+        ORDER BY op ASC
+    `;
+    const params = [git, maxThreads, machine];
+    return queryDatabase(query, params);
+}
+
+function getMachineHistoricalData(machine) {
+    const query = `
+        SELECT DISTINCT op, threads, dt, git, timestamp, gflops
+        FROM run
+        WHERE machine = ?
+        ORDER BY op ASC, threads DESC, dt ASC, timestamp DESC
+    `;
+    return queryDatabase(query, [machine]);
+}
+
+// Machine Overview Rendering
+function loadMachineOverview() {
+    try {
+        if (!db) {
+            showError('Database not loaded');
+            return;
+        }
+
+        showLoading();
+
+        const latestGit = getLatestGitCommit();
+        const maxThreads = getMaxThreads();
+        const machines = getAllMachines();
+
+        if (!latestGit || maxThreads === -1) {
+            showError('No data available');
+            clearLoading();
+            return;
+        }
+
+        const machineCards = machines.map(m => {
+            const machine = m.machine;
+            const overviewData = getMachineOverviewData(latestGit, maxThreads, machine);
+
+            const maxPerf = overviewData.length > 0
+                ? Math.max(...overviewData.map(d => d.gflops))
+                : 0;
+
+            const opsCount = overviewData.length;
+
+            return {
+                machine,
+                maxPerf,
+                opsCount,
+                opsList: overviewData.map(d => d.op).join(', '),
+                maxThreads,
+                latestGit: latestGit.substring(0, 8)
+            };
+        });
+
+        renderMachineOverview(machineCards);
+        clearLoading();
+
+        // Show overview view
+        switchViewToOverview();
+    } catch (error) {
+        showError(`Error loading overview: ${error.message}`);
+        clearLoading();
+    }
+}
+
+function renderMachineOverview(machineCards) {
+    const grid = document.getElementById('machines-grid');
+    grid.innerHTML = '';
+
+    machineCards.forEach(card => {
+        const cardEl = document.createElement('div');
+        cardEl.className = 'machine-card';
+        cardEl.innerHTML = `
+            <div class="machine-name">${card.machine}</div>
+            <div class="machine-stats">
+                <div class="stat-row">
+                    <span class="stat-label">Threads:</span>
+                    <span class="stat-value">${card.maxThreads}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Operations:</span>
+                    <span class="stat-value">${card.opsCount}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Git:</span>
+                    <span class="stat-value">${card.latestGit}...</span>
+                </div>
+            </div>
+            <div class="machine-performance">
+                Max Performance: ${card.maxPerf.toFixed(2)} GFLOP/s
+            </div>
+        `;
+        cardEl.onclick = () => loadMachineDetail(card.machine);
+        grid.appendChild(cardEl);
+    });
+}
+
+function switchViewToOverview() {
+    const overviewView = document.getElementById('overview-view');
+    const detailView = document.getElementById('detail-view');
+
+    overviewView.classList.add('active');
+    detailView.classList.remove('active');
+    currentView = 'overview';
+}
+
+// Machine Detail View
+function loadMachineDetail(machine) {
+    try {
+        currentMachine = machine;
+        showLoading();
+
+        const historicalData = getMachineHistoricalData(machine);
+
+        if (historicalData.length === 0) {
+            showError('No historical data available for this machine');
+            clearLoading();
+            return;
+        }
+
+        renderMachineDetail(machine, historicalData);
+        clearLoading();
+
+        // Switch to detail view
+        switchViewToDetail();
+    } catch (error) {
+        showError(`Error loading machine detail: ${error.message}`);
+        clearLoading();
+    }
+}
+
+function renderMachineDetail(machine, historicalData) {
+    // Set header info
+    document.getElementById('detail-machine-name').textContent = `${machine} - Historical Data`;
+    document.getElementById('detail-machine-info').textContent =
+        `Showing performance history across all operations, thread counts, and data types`;
+
+    // Group data by operation
+    const groupedByOp = {};
+    historicalData.forEach(row => {
+        if (!groupedByOp[row.op]) {
+            groupedByOp[row.op] = [];
+        }
+        groupedByOp[row.op].push(row);
+    });
+
+    const container = document.getElementById('historical-data-container');
+    container.innerHTML = '';
+
+    Object.keys(groupedByOp).sort().forEach(op => {
+        const opData = groupedByOp[op];
+
+        // Group by threads
+        const groupedByThreads = {};
+        opData.forEach(row => {
+            const key = `${row.threads} threads`;
+            if (!groupedByThreads[key]) {
+                groupedByThreads[key] = [];
+            }
+            groupedByThreads[key].push(row);
+        });
+
+        const opElement = document.createElement('div');
+        opElement.className = 'historical-operation-group';
+
+        const headerEl = document.createElement('div');
+        headerEl.className = 'operation-header';
+        headerEl.innerHTML = `
+            <span>${op}</span>
+            <span class="expand-icon">▼</span>
+        `;
+
+        const contentEl = document.createElement('div');
+        contentEl.className = 'operation-content';
+
+        // Build content with threads and data types
+        let contentHTML = '';
+        Object.keys(groupedByThreads).sort((a, b) => {
+            const aThreads = parseInt(a.split(' ')[0]);
+            const bThreads = parseInt(b.split(' ')[0]);
+            return bThreads - aThreads; // Descending
+        }).forEach(threadKey => {
+            const threadData = groupedByThreads[threadKey];
+
+            // Group by data type
+            const groupedByDT = {};
+            threadData.forEach(row => {
+                if (!groupedByDT[row.dt]) {
+                    groupedByDT[row.dt] = row.gflops;
+                } else {
+                    groupedByDT[row.dt] = Math.max(groupedByDT[row.dt], row.gflops);
+                }
+            });
+
+            contentHTML += `<div class="thread-data-group">
+                <div class="thread-label">${threadKey}</div>`;
+
+            Object.keys(groupedByDT).sort().forEach(dt => {
+                contentHTML += `
+                    <div class="dt-row">
+                        <span class="dt-label">${dt}</span>
+                        <span class="dt-value">${groupedByDT[dt].toFixed(2)} GFLOP/s</span>
+                    </div>
+                `;
+            });
+
+            contentHTML += '</div>';
+        });
+
+        contentEl.innerHTML = contentHTML;
+
+        // Toggle expand/collapse
+        headerEl.onclick = () => {
+            contentEl.classList.toggle('expanded');
+            headerEl.querySelector('.expand-icon').classList.toggle('expanded');
+        };
+
+        opElement.appendChild(headerEl);
+        opElement.appendChild(contentEl);
+        container.appendChild(opElement);
+    });
+}
+
+function switchViewToDetail() {
+    const overviewView = document.getElementById('overview-view');
+    const detailView = document.getElementById('detail-view');
+
+    overviewView.classList.remove('active');
+    detailView.classList.add('active');
+    currentView = 'detail';
+}
+
 // Charting Functions
 function renderChart(data) {
     const ctx = document.getElementById('chart').getContext('2d');
@@ -286,7 +635,6 @@ function renderChart(data) {
     }
 
     chartInstance = new Chart(ctx, chartConfig);
-    document.getElementById('chart-container').classList.add('active');
 }
 
 // Main Plot Generation Function
@@ -461,6 +809,9 @@ function generatePlot() {
 
 // Event Listeners
 document.addEventListener('DOMContentLoaded', function() {
+    // Auto-load the perf.sqlite database on page load
+    autoLoadDatabase();
+
     // Allow Enter to generate plot
     document.addEventListener('keypress', (event) => {
         if (event.key === 'Enter' && event.target.closest('.control-panel')) {

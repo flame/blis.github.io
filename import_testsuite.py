@@ -196,7 +196,9 @@ def insert_data(conn, data, git_commit, git_tag, machine=None):
             (
                 git_tag,
                 git_commit,
-                datetime.now().isoformat(),
+                data["timestamp"]
+                if "timestamp" in data
+                else datetime.now().isoformat(),
                 machine,
                 data["threads"],
                 operation["gflops"],

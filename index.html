@@ -12,119 +12,38 @@
     <div class="container">
         <h1>📊 Performance Data Visualization</h1>
 
-        <div class="db-loader">
-            <h2>Load Database</h2>
-            <input type="file" id="db-file" accept=".sqlite,.db" onchange="loadDatabase(event)">
-            <div class="db-status" id="db-status">No database loaded</div>
+        <div class="db-loader" id="db-loader">
+            <div class="progress-container" id="progress-container">
+                <div class="progress-label">Loading database...</div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill"></div>
+                </div>
+                <div class="progress-text" id="progress-text">0%</div>
+            </div>
+            <div class="db-status" id="db-status">Loading perf.sqlite...</div>
         </div>
 
         <div class="error-message" id="error-message"></div>
         <div class="success-message" id="success-message"></div>
 
-        <div class="control-panel" id="control-panel">
-            <h2>Query Parameters</h2>
-
-            <div class="form-grid">
-                <div class="form-group">
-                    <label for="plot-type">Plot Type *</label>
-                    <select id="plot-type" required onchange="updateConditionalGroups()">
-                        <option value="historical">Historical (Performance over Time)</option>
-                        <option value="scaling">Scaling (Performance vs Matrix Size)</option>
-                        <option value="overview">Overview (Performance by Operation)</option>
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label for="machine">Machine</label>
-                    <input type="text" id="machine" placeholder="e.g., server1">
-                    <span class="help-text">Leave empty for any</span>
-                </div>
-
-                <div class="form-group">
-                    <label for="dt">Data Type (dt)</label>
-                    <input type="text" id="dt" placeholder="e.g., float32">
-                    <span class="help-text">Leave empty for any</span>
-                </div>
-
-                <div class="form-group">
-                    <label for="threads">Threads</label>
-                    <input type="number" id="threads" placeholder="-1 for any" value="-1">
-                </div>
-
-                <div class="form-group">
-                    <label for="m">M (Matrix Dimension)</label>
-                    <input type="number" id="m" placeholder="-1 for any" value="-1">
-                </div>
-
-                <div class="form-group">
-                    <label for="n">N (Matrix Dimension)</label>
-                    <input type="number" id="n" placeholder="-1 for any" value="-1">
-                </div>
-
-                <div class="form-group">
-                    <label for="k">K (Matrix Dimension)</label>
-                    <input type="number" id="k" placeholder="-1 for any" value="-1">
-                </div>
+        <!-- Machine Overview View -->
+        <div class="view-container" id="overview-view">
+            <div class="view-header">
+                <h2>Performance Overview by Machine</h2>
             </div>
-
-            <!-- Historical Plot Parameters -->
-            <div class="conditional-group visible" id="historical-params">
-                <div class="form-grid">
-                    <div class="form-group">
-                        <label for="tag">Tag/Branch *</label>
-                        <input type="text" id="tag" placeholder="e.g., main">
-                        <span class="help-text">Branch or tag name</span>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="op">Operation (op) *</label>
-                        <input type="text" id="op" placeholder="e.g., gemm">
-                        <span class="help-text">Operation type</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Scaling Plot Parameters -->
-            <div class="conditional-group" id="scaling-params">
-                <div class="form-grid">
-                    <div class="form-group">
-                        <label for="git-scaling">Git Commit *</label>
-                        <input type="text" id="git-scaling" placeholder="e.g., abc123def">
-                        <span class="help-text">Git commit hash</span>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="op-scaling">Operation (op) *</label>
-                        <input type="text" id="op-scaling" placeholder="e.g., gemm">
-                        <span class="help-text">Operation type</span>
-                    </div>
-                </div>
-                <p style="color: #6c757d; font-size: 13px; margin-bottom: 10px;">
-                    <strong>Note:</strong> Leave one of M, N, or K as -1 to vary that dimension. Rows with equal dimensions for unspecified sizes will be included.
-                </p>
-            </div>
-
-            <!-- Overview Plot Parameters -->
-            <div class="conditional-group" id="overview-params">
-                <div class="form-group">
-                    <label for="git-overview">Git Commit *</label>
-                    <input type="text" id="git-overview" placeholder="e.g., abc123def">
-                    <span class="help-text">Git commit hash</span>
-                </div>
-                <p style="color: #6c757d; font-size: 13px; margin-bottom: 10px;">
-                    <strong>Note:</strong> M, N, and K must all be specified (not -1). Rows with -1 values will also be included.
-                </p>
-            </div>
-
-            <div class="button-group">
-                <button class="btn-generate" onclick="generatePlot()">Generate Plot</button>
-            </div>
+            <div class="machines-grid" id="machines-grid"></div>
         </div>
 
-        <div class="loading" id="loading"></div>
-        <div class="params-display" id="params-display"></div>
-        <div class="chart-container" id="chart-container">
-            <canvas id="chart"></canvas>
+        <!-- Machine Detail View -->
+        <div class="view-container" id="detail-view">
+            <button class="btn-back" onclick="backToOverview()" title="Back to Overview">
+                <span class="back-arrow">←</span> Back
+            </button>
+            <div class="machine-detail-header">
+                <h2 id="detail-machine-name">Machine Details</h2>
+                <p id="detail-machine-info"></p>
+            </div>
+            <div class="historical-data-container" id="historical-data-container"></div>
         </div>
     </div>
 
