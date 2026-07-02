@@ -68,8 +68,7 @@ def generate_testdata(
                 )
 
                 # Add random noise
-                noise_value = random.gauss(0, noise)
-                gflops = base_gflops * (1.0 + noise_value)
+                gflops = base_gflops + random.gauss(0, noise)
                 gflops = max(0.1, gflops)  # Ensure positive value
 
                 operations.append(
@@ -87,8 +86,7 @@ def generate_testdata(
                 )
 
                 # Add random noise
-                noise_value = random.gauss(0, noise / 100.0)
-                gflops = base_gflops * (1.0 + noise_value)
+                gflops = base_gflops + random.gauss(0, noise)
                 gflops = max(0.1, gflops)  # Ensure positive value
 
                 operations.append(
@@ -102,7 +100,7 @@ def main():
     # Default paths
     db_file = "perf.sqlite"
 
-    noise = 10.0  # 10.0 GFLOP/s normally distributed noise
+    noise = 5.0  # GFLOP/s normally distributed noise
 
     machines = [
         {

@@ -10,7 +10,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>📊 Performance Data Visualization</h1>
+        <h1>BLIS Performance Dashboard</h1>
 
         <div class="db-loader" id="db-loader">
             <div class="progress-container" id="progress-container">
@@ -28,9 +28,22 @@
 
         <!-- Machine Overview View -->
         <div class="view-container" id="overview-view">
-            <div class="view-header">
-                <h2>Performance Overview by Machine</h2>
+            <!-- Branch/Tag Selectors -->
+            <div class="branch-selector-container">
+                <div class="branch-selector-group">
+                    <label for="test-branch-select">Test Branch/Tag:</label>
+                    <select id="test-branch-select" class="branch-select">
+                        <option value="">Loading...</option>
+                    </select>
+                </div>
+                <div class="branch-selector-group">
+                    <label for="reference-branch-select">Reference Branch/Tag:</label>
+                    <select id="reference-branch-select" class="branch-select">
+                        <option value="">Loading...</option>
+                    </select>
+                </div>
             </div>
+
             <div class="machines-grid" id="machines-grid"></div>
         </div>
 

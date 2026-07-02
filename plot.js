@@ -7,6 +7,13 @@ let currentMachine = null;
 // Progress tracking
 let progressInterval = null;
 
+// Card chart instances
+let cardChartInstances = {};
+
+// Branch/Tag selection
+let selectedTestBranch = 'master';
+let selectedReferenceBranch = 'v2.1';
+
 // Database Initialization
 async function initializeDatabase() {
     if (SQL) return;
@@ -77,6 +84,7 @@ async function autoLoadDatabase() {
         setTimeout(() => {
             clearLoading();
             document.getElementById('db-loader').style.display = 'none';
+            populateBranchSelectors();
             loadMachineOverview();
         }, 300);
     } catch (error) {
@@ -117,7 +125,8 @@ async function loadDatabase(event) {
         showSuccess(`Database loaded successfully: ${file.name}`);
         clearLoading();
 
-        // Load machine overview
+        // Populate branch selectors and load machine overview
+        populateBranchSelectors();
         loadMachineOverview();
     } catch (error) {
         showError(`Failed to load database: ${error.message}`);
@@ -330,12 +339,125 @@ function queryOverviewPlot(git, machine, threads, dt, m, n, k) {
     return queryDatabase(query, params);
 }
 
+function queryComparisonPlot(testGit, refGit, machine, threads, dt, m, n, k) {
+    // Query data for test branch
+    const testData = queryOverviewPlot(testGit, machine, threads, dt, m, n, k);
+
+    // Query data for reference branch
+    const refData = queryOverviewPlot(refGit, machine, threads, dt, m, n, k);
+
+    // Create maps for easy lookup
+    const testByOp = {};
+    const refByOp = {};
+
+    testData.forEach(row => {
+        if (!testByOp[row.op]) testByOp[row.op] = [];
+        testByOp[row.op].push(row.gflops);
+    });
+
+    refData.forEach(row => {
+        if (!refByOp[row.op]) refByOp[row.op] = [];
+        refByOp[row.op].push(row.gflops);
+    });
+
+    // Calculate percentage change for each operation
+    const comparisonData = [];
+    Object.keys(testByOp).forEach(op => {
+        if (refByOp[op]) {
+            const testMax = Math.max(...testByOp[op]);
+            const refMax = Math.max(...refByOp[op]);
+
+            if (refMax > 0) {
+                const percentChange = ((testMax / refMax) - 1) * 100;
+                comparisonData.push({
+                    op,
+                    percentChange,
+                    testGflops: testMax,
+                    refGflops: refMax
+                });
+            }
+        }
+    });
+
+    return comparisonData.sort((a, b) => a.op.localeCompare(b.op));
+}
+
 // Machine Overview Query Functions
 function getLatestGitCommit() {
     const query = 'SELECT DISTINCT git FROM run ORDER BY timestamp DESC LIMIT 1';
     const result = queryDatabase(query);
     return result.length > 0 ? result[0].git : null;
 }
+
+function getAllTags() {
+    const query = 'SELECT DISTINCT tag FROM run ORDER BY tag ASC';
+    return queryDatabase(query);
+}
+
+function getLatestGitCommitForTag(tag) {
+    const query = 'SELECT DISTINCT git FROM run WHERE tag = ? ORDER BY timestamp DESC LIMIT 1';
+    const result = queryDatabase(query, [tag]);
+    return result.length > 0 ? result[0].git : null;
+}
+
+function populateBranchSelectors() {
+    try {
+        const allTags = getAllTags();
+        const tags = allTags.map(t => t.tag).filter(t => t && t.trim() !== '');
+
+        const testSelect = document.getElementById('test-branch-select');
+        const refSelect = document.getElementById('reference-branch-select');
+
+        // Clear existing options
+        testSelect.innerHTML = '';
+        refSelect.innerHTML = '';
+
+        // Populate both selects with the same tags
+        tags.forEach(tag => {
+            const option1 = document.createElement('option');
+            option1.value = tag;
+            option1.textContent = tag;
+            testSelect.appendChild(option1);
+
+            const option2 = document.createElement('option');
+            option2.value = tag;
+            option2.textContent = tag;
+            refSelect.appendChild(option2);
+        });
+
+        // Set default values
+        if (tags.includes('master')) {
+            testSelect.value = 'master';
+            selectedTestBranch = 'master';
+        } else if (tags.length > 0) {
+            testSelect.value = tags[0];
+            selectedTestBranch = tags[0];
+        }
+
+        if (tags.includes('v2.1')) {
+            refSelect.value = 'v2.1';
+            selectedReferenceBranch = 'v2.1';
+        } else if (tags.length > 0) {
+            refSelect.value = tags[tags.length - 1];
+            selectedReferenceBranch = tags[tags.length - 1];
+        }
+
+        // Add event listeners for changes
+        testSelect.addEventListener('change', function() {
+            selectedTestBranch = this.value;
+            loadMachineOverview(); // Reload the overview with the new selection
+        });
+
+        refSelect.addEventListener('change', function() {
+            selectedReferenceBranch = this.value;
+            loadMachineOverview(); // Reload the overview to update reference branch display
+        });
+
+    } catch (error) {
+        console.error('Error populating branch selectors:', error);
+    }
+}
+
 
 function getMaxThreads() {
     const query = 'SELECT MAX(threads) as max_threads FROM run';
@@ -346,18 +468,6 @@ function getMaxThreads() {
 function getAllMachines() {
     const query = 'SELECT DISTINCT machine FROM run ORDER BY machine ASC';
     return queryDatabase(query);
-}
-
-function getMachineOverviewData(git, maxThreads, machine) {
-    let query = `
-        SELECT op, MAX(gflops) as gflops
-        FROM run
-        WHERE git = ? AND threads = ? AND machine = ?
-        GROUP BY op
-        ORDER BY op ASC
-    `;
-    const params = [git, maxThreads, machine];
-    return queryDatabase(query, params);
 }
 
 function getMachineHistoricalData(machine) {
@@ -380,33 +490,27 @@ function loadMachineOverview() {
 
         showLoading();
 
-        const latestGit = getLatestGitCommit();
+        // Get the git commit for the selected test branch
+        const testGit = getLatestGitCommitForTag(selectedTestBranch);
+        const refGit = getLatestGitCommitForTag(selectedReferenceBranch);
         const maxThreads = getMaxThreads();
         const machines = getAllMachines();
 
-        if (!latestGit || maxThreads === -1) {
-            showError('No data available');
+        if (!testGit || maxThreads === -1) {
+            showError('No data available for the selected branch');
             clearLoading();
             return;
         }
 
         const machineCards = machines.map(m => {
             const machine = m.machine;
-            const overviewData = getMachineOverviewData(latestGit, maxThreads, machine);
-
-            const maxPerf = overviewData.length > 0
-                ? Math.max(...overviewData.map(d => d.gflops))
-                : 0;
-
-            const opsCount = overviewData.length;
-
             return {
                 machine,
-                maxPerf,
-                opsCount,
-                opsList: overviewData.map(d => d.op).join(', '),
                 maxThreads,
-                latestGit: latestGit.substring(0, 8)
+                testGitFull: testGit,
+                testGit: testGit.substring(0, 7),
+                refGitFull: refGit,
+                refGit: refGit.substring(0, 7)
             };
         });
 
@@ -425,32 +529,148 @@ function renderMachineOverview(machineCards) {
     const grid = document.getElementById('machines-grid');
     grid.innerHTML = '';
 
-    machineCards.forEach(card => {
+    machineCards.forEach((card, index) => {
         const cardEl = document.createElement('div');
         cardEl.className = 'machine-card';
+        cardEl.id = `machine-card-${card.machine}`;
+
+        // Create card content with chart placeholder
         cardEl.innerHTML = `
-            <div class="machine-name">${card.machine}</div>
-            <div class="machine-stats">
-                <div class="stat-row">
-                    <span class="stat-label">Threads:</span>
-                    <span class="stat-value">${card.maxThreads}</span>
-                </div>
-                <div class="stat-row">
-                    <span class="stat-label">Operations:</span>
-                    <span class="stat-value">${card.opsCount}</span>
-                </div>
-                <div class="stat-row">
-                    <span class="stat-label">Git:</span>
-                    <span class="stat-value">${card.latestGit}...</span>
+            <div class="machine-info">
+                <div class="machine-name">${card.machine}</div>
+                <div class="machine-stats">
+                    <div class="stat-row">
+                        <span class="stat-label">Threads:</span>
+                        <span class="stat-value">${card.maxThreads}</span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Latest commit:</span>
+                        <span class="stat-value">${card.testGit} (${selectedTestBranch})</span>
+                        <span class="stat-value">${card.refGit} (${selectedReferenceBranch})</span>
+                    </div>
                 </div>
             </div>
-            <div class="machine-performance">
-                Max Performance: ${card.maxPerf.toFixed(2)} GFLOP/s
+            <div class="machine-card-chart">
+                <canvas id="card-chart-${card.machine}"></canvas>
             </div>
         `;
+
         cardEl.onclick = () => loadMachineDetail(card.machine);
         grid.appendChild(cardEl);
+
+        // Render chart for this card
+        renderCardChart(card);
     });
+}
+
+function renderCardChart(card) {
+    try {
+        // Query comparison data: percentage change from reference to test branch
+        const comparisonData = queryComparisonPlot(
+            card.testGitFull,
+            card.refGitFull,
+            card.machine,
+            card.maxThreads,
+            -1, -1, -1, -1
+        );
+
+        if (!comparisonData || comparisonData.length === 0) {
+            return; // No data for this machine
+        }
+
+        // Extract labels and data
+        const labels = comparisonData.map(item => item.op);
+        const data = comparisonData.map(item => item.percentChange);
+
+        const colors = [
+            'rgb(255, 99, 132)',
+            'rgb(54, 162, 235)',
+            'rgb(255, 206, 86)',
+            'rgb(75, 192, 192)',
+            'rgb(153, 102, 255)',
+            'rgb(255, 159, 64)',
+            'rgb(201, 203, 207)',
+            'rgb(255, 193, 7)'
+        ];
+
+        const canvasId = `card-chart-${card.machine}`;
+        const canvasEl = document.getElementById(canvasId);
+
+        if (!canvasEl) return;
+
+        const ctx = canvasEl.getContext('2d');
+
+        // Destroy existing chart instance if it exists
+        if (cardChartInstances[canvasId]) {
+            cardChartInstances[canvasId].destroy();
+        }
+
+        const chartConfig = {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    label: '% Change',
+                    data,
+                    backgroundColor: colors.slice(0, labels.length),
+                    borderWidth: 1,
+                    borderColor: 'rgba(0, 0, 0, 0.1)'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    legend: {
+                        display: false
+                    },
+                    tooltip: {
+                        enabled: true,
+                        callbacks: {
+                            label: function(context) {
+                                return context.parsed.y.toFixed(1) + '%';
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        min: -25,
+                        max: 25,
+                        beginAtZero: true,
+                        ticks: {
+                            font: {
+                                size: 10
+                            },
+                            callback: function(value) {
+                                return value.toFixed(0) + '%';
+                            }
+                        },
+                        title: {
+                            display: true,
+                            text: '% Change',
+                            font: {
+                                size: 10
+                            }
+                        }
+                    },
+                    x: {
+                        ticks: {
+                            font: {
+                                size: 10
+                            },
+                            maxRotation: 45,
+                            minRotation: 0
+                        }
+                    }
+                }
+            }
+        };
+
+        cardChartInstances[canvasId] = new Chart(ctx, chartConfig);
+    } catch (error) {
+        console.warn(`Error rendering card chart for ${card.machine}:`, error);
+    }
 }
 
 function switchViewToOverview() {
